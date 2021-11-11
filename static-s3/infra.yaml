@@ -76,7 +76,7 @@ Resources:
         DefaultRootObject: index.html
         Origins:
           - DomainName: !GetAtt S3Bucket.DomainName
-            OriginPath: static-s3/web
+            OriginPath: "/static-s3/web"
             Id: !Sub 'S3-${AWS::StackName}-${S3Bucket}-root'
             S3OriginConfig:
               OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}"
