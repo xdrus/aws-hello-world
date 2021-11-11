@@ -2,20 +2,37 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Simple static website with cloudfront and S3.
+Parameters:
+  WebSiteBucketName:
+    Type: String
+    Description: S3 bucket name to host static website. It needs to be static in order to restrict CodePipeline S3 permissions and break a circular dependency.
 
 Resources:
+
+  LogsS3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AccessControl: LogDeliveryWrite
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
   S3Bucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
+      BucketName: !Ref WebSiteBucketName
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
-      Tags:
-        - Key: Stack
-          Value: !Ref AWS::StackName
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LogsS3Bucket
+        LogFilePrefix: 's3logs/'
 
   S3BucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -62,10 +79,14 @@ Resources:
             Id: !Sub 'S3-${AWS::StackName}-${S3Bucket}-root'
             S3OriginConfig:
               OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}"
-            
+        Logging:
+          Bucket: !Ref LogsS3Bucket
+          IncludeCookies: false
+          Prefix: 'cloudfront/'
+
 Outputs:
   WebsiteURL:
-    Value: !GetAtt CloudFrontDistribution.DomainName
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
     Description: The URL of the newly created website
 
 

@@ -1,0 +1,229 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CI/CD Resources
+
+Parameters:
+  WebSiteBucketName:
+    Type: String
+    Description: A name of S3 bucket with web-site content
+    AllowedPattern: .+
+
+  GitHubRepo:
+    Type: String
+    Description: Full GitHub repo name in format user/repo
+    AllowedPattern: ^\S+/\S+$
+
+  GitHubBranch:
+    Type: String
+    AllowedPattern: .+
+    Default: "main"
+
+  NotificationsEmail:
+    Description: Email for notifications
+    Type: String
+    AllowedPattern: ^\S+@\S+\.\S+$$
+
+Resources:
+  
+  ## CodePipeline resources
+  # This bucket is used internally by CodePipeline to store artefacts
+  CodePipelineBucket:
+    Type: "AWS::S3::Bucket"
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  # IAM policy to allow CodePipeline to create resources and get access to required services
+  CodePipelineDefaultIAMPolicy:
+    Type: "AWS::IAM::ManagedPolicy"
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: BucketsReadWrite
+            Effect: Allow
+            Action:
+              - "s3:*"
+            Resource:
+              - !Sub "${CodePipelineBucket.Arn}"
+              - !Sub "${CodePipelineBucket.Arn}/*"
+              - !Sub "arn:aws:s3:::${WebSiteBucketName}"
+              - !Sub "arn:aws:s3:::${WebSiteBucketName}/*"
+          - Sid: CloudFormation
+            Action:
+              - cloudformation:CreateStack
+              - cloudformation:DeleteStack
+              - cloudformation:DescribeStacks
+              - cloudformation:UpdateStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:SetStackPolicy
+              - cloudformation:ValidateTemplate
+              - iam:PassRole
+            Resource: "*"
+            Effect: Allow
+          - Sid: CodeBuild
+            Action:
+            - codebuild:BatchGetBuilds
+            - codebuild:StartBuild
+            Resource: "*"
+            Effect: Allow
+          - Sid: CodeStarConnections
+            Action:
+              - codestar-connections:UseConnection
+            Resource: "*"
+            Effect: Allow
+          - Sid: SNS
+            Action:
+              - sns:Publish
+            Resource: !Ref NotificationsTopic
+            Effect: Allow
+
+  # SNS topic to get notifications about deployments
+  NotificationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: CI/CD Notifications
+      Subscription:
+        - Endpoint: !Ref NotificationsEmail
+          Protocol: email
+      TopicName: CICD-Notifications
+
+  # This is rule to get notifications regarding *all* pipelines.
+  # With system growth it can be ether moved out to a more generic infrastructure code to avoid duplicates
+  # or refactored to be a pipeline specific (Note: be aware of EventBridge limits!)
+  AllPipelinesNotificationRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Notify in case of any pipeline's failure or success
+      EventPattern: |
+        {
+          "source": [
+            "aws.codepipeline"
+          ],
+          "detail-type": [
+            "CodePipeline Pipeline Execution State Change"
+          ],
+          "detail": {
+            "state": [
+              "FAILED",
+              "SUCCEEDED"
+            ]
+          }
+        }
+      Name: cicd-codepipeline-notifications
+      State: ENABLED
+      Targets:
+        - Id: sns-notification
+          Arn: !Ref NotificationsTopic
+          InputTransformer:
+            InputPathsMap:
+              state: "$.detail.state"
+              pipeline: "$.detail.pipeline"
+              executionid: "$.detail.execution-id"
+            InputTemplate: !Sub  "\"Hello,
+              Your pipeline <pipeline> execution <executionid> has <state>.
+              Please log in into account (${AWS::AccountId}) and use this link to get more details -
+              https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/<pipeline>/executions/<executionid>/timeline?region=${AWS::Region}
+              Best,
+              Bot.\""
+
+  # CodePipelineRole
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: codepipeline.amazonaws.com
+      Description: "Role to static website resources"
+      ManagedPolicyArns:
+        - !Ref CodePipelineDefaultIAMPolicy
+
+  GHConnection:
+    Type: 'AWS::CodeStarConnections::Connection'
+    Properties:
+      ConnectionName: GitHubConnection
+      ProviderType: GitHub
+
+  WebSitePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "hello-world-deployment-into-${WebSiteBucketName}"
+      ArtifactStore:
+          Location: !Ref CodePipelineBucket
+          Type: S3
+      RestartExecutionOnUpdate: false
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: "1"
+                Provider: CodeStarSourceConnection
+              Configuration:
+                ConnectionArn: !GetAtt GHConnection.ConnectionArn
+                FullRepositoryId: !Ref GitHubRepo
+                BranchName: !Ref GitHubBranch
+              OutputArtifacts:
+                - Name: source
+              Region: ap-southeast-2
+              RunOrder: 1
+              Namespace: Source
+        - Name: ChangeSets
+          Actions:
+            - Name: CreateChangeSet
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              InputArtifacts:
+                - Name: source
+              Configuration:
+                ActionMode: CHANGE_SET_REPLACE
+                StackName: !Sub "website-${WebSiteBucketName}-resources"
+                ChangeSetName: "codepipeline-update-#{codepipeline.PipelineExecutionId}"
+                TemplatePath: "source::static-s3/infra.yaml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                ParameterOverrides: !Sub >
+                  {
+                    "WebSiteBucketName": "${WebSiteBucketName}"
+                  }
+              RunOrder: 1
+        # There is no approval in beetween, but it can be implemented as the last action of the previos stage
+        - Name: Deploy
+          Actions:
+            - Name: ExecuteChangeSet
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CHANGE_SET_EXECUTE
+                ChangeSetName: "codepipeline-update-#{codepipeline.PipelineExecutionId}"
+                StackName: !Sub "website-${WebSiteBucketName}-resources"
+              RunOrder: 1
+                # - Name: Post-Deployment verification
+
+Outputs:
+  CodePipelineBucketName:
+    Description: Name of shared artifact bucket for CodePipeline.
+    Value: !Ref CodePipelineBucket
+
