@@ -13,4 +13,50 @@ CloudFront is used to provide HTTPS access to the content (S3 static website all
 * [static-s3/web](static-s3/web) is web site content
 
 ### How to deploy
-CloudFormation template doesn't require any parameters and can be deployed via console or CLI. The output would give you a web-site URL and S3 bucket name. Upload content from web folder to the root of S3 bucket and it is ready to be served (subject to some propogation delays).
+
+#### Prerequisites
+* You need to fork this repository if you want to deploy the project into your account.
+* You need to have AWS account and aws cli configured (or alternatively have acccess to AWS console)
+* You need to clone this repo in order to runn the commands below (or alternatively download required files manually and use AWS console).
+
+#### Step 1: set variables
+Override environment variables if you need so (i.e. change email or region):
+
+```bash
+AWS_REGION=ap-southeast-2
+
+GWOwner=xdrus
+GHRepo=aws-hello-world
+EMAIL=`git config --get user.email`
+
+AWS_ACCOUNT=`aws sts get-caller-identity --query "Account" --output text`
+BUCKET_NAME="${GHRepo}-${AWS_REGION}-${AWS_ACCOUNT}"
+```
+
+#### Step 2: Deploy CI/CD infrastructure
+
+```bash
+aws cloudformation deploy \
+    --no-fail-on-empty-changeset \
+	--parameter-overrides GitHubRepo=$GWOwner/$GHRepo WebSiteBucketName=$BUCKET_NAME NotificationsEmail=$EMAIL \
+	--stack-name $GHRepo-deployment-resources \
+	--template-file static-s3/cicd/deployment.yaml \
+	--tags "Project=$GHRepo" \
+    --capabilities CAPABILITY_IAM
+```
+
+if you want to get email notifications about deployment status please confirm SNS topic subscription (you will get an email in mailbox specified in the `EMAIL` variable above)
+
+#### Step 3: integration with GitHub
+
+Codepipeline created on the step 2 uses [CodeStar Connections](https://docs.aws.amazon.com/dtconsole/latest/userguide/welcome-connections.html)
+for GitHub integration. Connections created through [CloudFormation resource](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-codestarconnections-connection.html)
+are in Pending state by default and require manual updating in the web console. Please refer to [this guide](https://docs.aws.amazon.com/dtconsole/latest/userguide/connections-update.html)
+to finish setup and allow CodePipeline to get access to GitHub.
+
+One you have installed AWS application for GitHub and granted access to the target repository you can re-run pipeline:
+
+```bash
+PIPELINE=`aws codepipeline list-pipelines --query "pipelines[?contains(@.name, '$BUCKET')].name" --output text`
+aws codepipeline start-pipeline-execution --name $PIPELINE
+```
