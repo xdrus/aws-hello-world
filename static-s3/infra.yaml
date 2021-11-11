@@ -70,9 +70,14 @@ Resources:
           TargetOriginId: !Sub 'S3-${AWS::StackName}-${S3Bucket}-root'
           ViewerProtocolPolicy: redirect-to-https
           Compress: true
-          DefaultTTL: 86400
+          DefaultTTL: 3600
           ForwardedValues:
             QueryString: true
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ErrorCachingMinTTL: 60
+          - ErrorCode: 403
+            ErrorCachingMinTTL: 60
         DefaultRootObject: index.html
         Origins:
           - DomainName: !GetAtt S3Bucket.DomainName
