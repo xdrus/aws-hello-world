@@ -4,9 +4,10 @@ Simple IaC project
 
 ## Architecture
 
-It is a simple static web-page hosted in a private S3 bucket and distributed through CloudFront (CF)).
+It is a simple static web-page hosted in a private S3 bucket and distributed through CloudFront (CF).
 CloudFront is used to provide HTTPS access to the content (S3 static website allows only HTTP).
-[Origin access identity (OAI)](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html) is used to secure access from CF to S3
+[Origin access identity (OAI)](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html)
+is used to secure access from CF to S3
 
 ## Deployment
 
@@ -14,14 +15,16 @@ CloudFront is used to provide HTTPS access to the content (S3 static website all
 
 * [static-s3/infra.yaml](static-s3/infra.yaml) containes code to create resources required for web-site, such as S3 bucket, CF, etc. For simlicity, site is created with default CF URL to avoid additional charges (such as registration of your domain name).
 * [static-s3/web](static-s3/web) is web site content
+* [static-s3/cicd/deployment.yaml](static-s3/cicd/deployment.yaml) created a deployment pipeline to deploy web-site changes automatically. **Note**: Deployment infrastructure is not updated automatically yet, you need to re-execute Step 1 and Step 2 below to deploy any changes to this file.
+* [tests](tests) contains a simple testing framework that can be used both as deployment validation and health-check. 
 
 ### How to deploy
 
 #### Prerequisites
 
+* You need to an AWS account and aws cli configured (or alternatively have acccess to AWS console)
 * You need to fork this repository if you want to deploy the project into your account.
-* You need to have AWS account and aws cli configured (or alternatively have acccess to AWS console)
-* You need to clone this repo in order to runn the commands below (or alternatively download required files manually and use AWS console).
+* You need to clone this repo/fork in order to run the commands below (or alternatively download required files manually and use AWS console).
 
 #### Step 1: set variables
 
@@ -50,7 +53,7 @@ aws cloudformation deploy \
     --capabilities CAPABILITY_IAM
 ```
 
-if you want to get email notifications about deployment status please confirm SNS topic subscription (you will get an email in mailbox specified in the `EMAIL` variable above)
+if you want to get email notifications about deployment status please confirm SNS topic subscription (you will get an email in mailbox specified in the `EMAIL` variable above).
 
 #### Step 3: integration with GitHub
 
@@ -65,6 +68,8 @@ One you have installed AWS application for GitHub and granted access to the targ
 PIPELINE=`aws codepipeline list-pipelines --query "pipelines[?contains(@.name, '$BUCKET')].name" --output text`
 aws codepipeline start-pipeline-execution --name $PIPELINE
 ```
+
+If you have confirmed subscription you will get a notification email in case of both failure and succesfull deployment. Alternatively you can check a status of pipeline in AWS web console.
 
 ### How to test
 
@@ -87,8 +92,8 @@ pipenv install
 #### Get test URL
 
 ```bash
-URL=`aws cloudformation describe-stacks --stack-name website-$BUCKET-resources \
-            --query 'Stacks[0].Outputs[?OutputKey==`WebsiteURL`].OutputValue' --output text`
+URL=$(aws cloudformation describe-stacks --stack-name website-$BUCKET_NAME-resources \
+            --query 'Stacks[0].Outputs[?OutputKey==`WebsiteURL`].OutputValue' --output text)
 ```
 
 #### Run tests
