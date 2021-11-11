@@ -88,6 +88,36 @@ Resources:
             Resource: !Ref NotificationsTopic
             Effect: Allow
 
+  # IAM policy to allow CloudFormation to deploy resources
+  CFNDeploymentPolicy:
+    Type: "AWS::IAM::ManagedPolicy"
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: S3andCloudFrontAccess
+            Effect: Allow
+            Action:
+              - "s3:*"
+              - "cloudfront:*"
+            Resource: "*"
+
+  # CloudFormation deployment role
+  CFNDeploymentRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      ManagedPolicyArns:
+        - !Ref CFNDeploymentPolicy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "cloudformation.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+
   # SNS topic to get notifications about deployments
   NotificationsTopic:
     Type: AWS::SNS::Topic
@@ -152,12 +182,16 @@ Resources:
       ManagedPolicyArns:
         - !Ref CodePipelineDefaultIAMPolicy
 
+  # Code* to GH integration
+  # this resource will require one-time manual update
+  # check README for details
   GHConnection:
     Type: 'AWS::CodeStarConnections::Connection'
     Properties:
       ConnectionName: GitHubConnection
       ProviderType: GitHub
 
+  # Main deployment pipeline
   WebSitePipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
@@ -185,7 +219,7 @@ Resources:
               Region: ap-southeast-2
               RunOrder: 1
               Namespace: Source
-        - Name: ChangeSets
+        - Name: InfrastructureDeployment
           Actions:
             - Name: CreateChangeSet
               ActionTypeId:
@@ -196,6 +230,7 @@ Resources:
               InputArtifacts:
                 - Name: source
               Configuration:
+                RoleArn: !GetAtt CFNDeploymentRole.Arn
                 ActionMode: CHANGE_SET_REPLACE
                 StackName: !Sub "website-${WebSiteBucketName}-resources"
                 ChangeSetName: "codepipeline-update-#{codepipeline.PipelineExecutionId}"
@@ -206,9 +241,7 @@ Resources:
                     "WebSiteBucketName": "${WebSiteBucketName}"
                   }
               RunOrder: 1
-        # There is no approval in beetween, but it can be implemented as the last action of the previos stage
-        - Name: Deploy
-          Actions:
+            # There is no approval in beetween, but it can be added in between
             - Name: ExecuteChangeSet
               ActionTypeId:
                 Category: Deploy
@@ -219,6 +252,20 @@ Resources:
                 ActionMode: CHANGE_SET_EXECUTE
                 ChangeSetName: "codepipeline-update-#{codepipeline.PipelineExecutionId}"
                 StackName: !Sub "website-${WebSiteBucketName}-resources"
+              RunOrder: 10
+        - Name: WebSiteDeployment
+          Actions:
+            - Name: DeployContent
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: S3
+                Version: '1'
+              InputArtifacts:
+                - Name: source
+              Configuration:
+                BucketName: !Ref WebSiteBucketName
+                Extract: true
               RunOrder: 1
                 # - Name: Post-Deployment verification
 
