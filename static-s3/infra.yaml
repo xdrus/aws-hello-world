@@ -1,0 +1,71 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Simple static website with cloudfront and S3.
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Stack
+          Value: !Ref AWS::StackName
+
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+              - s3:GetObject
+            Effect: Allow
+            Resource: !Sub "${S3Bucket.Arn}/*"
+            Principal:
+              CanonicalUser: !GetAtt CloudFrontOriginAccessIdentity.S3CanonicalUserId
+
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: cf-to-s3
+
+  ## CF Distribution is required to provide HTTPS access
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: CDN for S3-backed website
+        Enabled: true
+        IPV6Enabled: true
+        HttpVersion: "http2"
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - "GET"
+            - "HEAD"
+          TargetOriginId: !Sub 'S3-${AWS::StackName}-${S3Bucket}-root'
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          DefaultTTL: 86400
+          ForwardedValues:
+            QueryString: true
+        DefaultRootObject: index.html
+        Origins:
+          - DomainName: !GetAtt S3Bucket.DomainName
+            Id: !Sub 'S3-${AWS::StackName}-${S3Bucket}-root'
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}"
+            
+Outputs:
+  WebsiteURL:
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Description: The URL of the newly created website
+
+
